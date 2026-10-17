@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "io.github.funkyspider.keyboard-backlight",
   "name": "Keyboard Backlight",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "author": "funkyspider",
   "license": "MIT",
   "description": "A native Omarchy popup slider for laptop keyboard backlight control",

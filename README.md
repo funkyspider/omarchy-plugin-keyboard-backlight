@@ -4,6 +4,8 @@ A native Omarchy bar plugin for controlling a laptop keyboard backlight with an 
 
 The plugin is event-driven: it reads the hardware when it starts, whenever the popup opens, and after every action. It does **not** poll in the background.
 
+![Keyboard Backlight popup](preview.png)
+
 ## Features
 
 - Native Omarchy popup with a 0–100% brightness slider
@@ -37,6 +39,16 @@ The widget is placed in the right section by default. Move it with:
 ```bash
 omarchy bar move io.github.funkyspider.keyboard-backlight --section right
 ```
+
+## Remove
+
+```bash
+omarchy plugin remove io.github.funkyspider.keyboard-backlight
+```
+
+The optional remembered level is stored under
+`${XDG_STATE_HOME:-~/.local/state}/omarchy-keyboard-backlight/` and may be
+deleted separately if you do not want to retain it.
 
 ## Controls
 

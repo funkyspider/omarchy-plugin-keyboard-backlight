@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.0.1 - 2026-10-17
+
+- Add a marketplace preview image
+- Document plugin removal and optional state cleanup
+
 ## 1.0.0 - 2026-10-17
 
 - Initial release

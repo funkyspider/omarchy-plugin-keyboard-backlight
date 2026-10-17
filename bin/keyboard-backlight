@@ -1,0 +1,168 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+action="${1:-status}"
+shift $(( $# > 0 ? 1 : 0 ))
+
+requested_percent=""
+if [[ "$action" == "set" ]]; then
+  requested_percent="${1:-}"
+  [[ -n "$requested_percent" ]] || {
+    echo "keyboard-backlight: set requires a percentage" >&2
+    exit 2
+  }
+  shift
+fi
+
+requested_device="${1:-${KEYBOARD_BACKLIGHT_DEVICE:-}}"
+sysfs_root="${KEYBOARD_BACKLIGHT_SYSFS_ROOT:-/sys/class/leds}"
+brightnessctl_bin="${BRIGHTNESSCTL:-brightnessctl}"
+if [[ -n ${KEYBOARD_BACKLIGHT_STATE_HOME:-} ]]; then
+  state_root="$KEYBOARD_BACKLIGHT_STATE_HOME"
+elif [[ -n ${XDG_STATE_HOME:-} ]]; then
+  state_root="$XDG_STATE_HOME/omarchy-keyboard-backlight"
+elif [[ -n ${HOME:-} ]]; then
+  state_root="$HOME/.local/state/omarchy-keyboard-backlight"
+else
+  state_root=""
+fi
+
+fail() {
+  echo "keyboard-backlight: $*" >&2
+  exit 1
+}
+
+find_device() {
+  if [[ -n "$requested_device" ]]; then
+    [[ "$requested_device" != */* ]] || fail "device must be a brightnessctl device name"
+    [[ -d "$sysfs_root/$requested_device" ]] || return 1
+    printf '%s\n' "$requested_device"
+    return
+  fi
+
+  local candidate
+  shopt -s nullglob
+  for candidate in "$sysfs_root"/*kbd_backlight*; do
+    [[ -d "$candidate" ]] || continue
+    basename "$candidate"
+    return
+  done
+  return 1
+}
+
+read_integer() {
+  local path="$1" value
+  [[ -r "$path" ]] || return 1
+  IFS= read -r value < "$path" || return 1
+  [[ "$value" =~ ^[0-9]+$ ]] || return 1
+  printf '%s\n' "$value"
+}
+
+device="$(find_device)" || {
+  echo "unavailable"
+  exit 3
+}
+device_path="$sysfs_root/$device"
+maximum="$(read_integer "$device_path/max_brightness")" || fail "cannot read $device/max_brightness"
+(( maximum > 0 )) || fail "$device reports an invalid maximum brightness"
+
+current_brightness() {
+  read_integer "$device_path/brightness" || fail "cannot read $device/brightness"
+}
+
+print_status() {
+  local current percent
+  current="$(current_brightness)"
+  percent=$(( (current * 100 + maximum / 2) / maximum ))
+  printf 'available\t%s\t%s\t%s\t%s\n' "$device" "$current" "$maximum" "$percent"
+}
+
+state_file=""
+if [[ -n "$state_root" ]]; then
+  safe_device="${device//[^A-Za-z0-9_.-]/_}"
+  state_file="$state_root/$safe_device"
+fi
+
+ensure_private_state_root() {
+  [[ -n "$state_root" ]] || fail "no state directory is available"
+  [[ ! -L "$state_root" ]] || fail "state directory must not be a symlink"
+
+  umask 077
+  mkdir -p -- "$state_root" || fail "cannot create state directory"
+  [[ -d "$state_root" ]] || fail "state path is not a directory"
+  [[ "$(stat -c '%u' -- "$state_root")" == "$EUID" ]] || fail "state directory is not owned by the current user"
+  chmod 700 -- "$state_root" || fail "cannot secure state directory"
+}
+
+remember_brightness() {
+  local value="$1" temporary
+  (( value > 0 && value <= maximum )) || return
+  ensure_private_state_root
+  temporary="$(mktemp "$state_root/.${safe_device}.XXXXXX")" || fail "cannot create state file"
+  printf '%s\n' "$value" > "$temporary"
+  chmod 600 -- "$temporary"
+  mv -fT -- "$temporary" "$state_file"
+}
+
+saved_brightness() {
+  local value
+  ensure_private_state_root
+  if [[ -f "$state_file" && ! -L "$state_file" ]]; then
+    IFS= read -r value < "$state_file" || value=""
+    if [[ "$value" =~ ^[0-9]+$ ]] && (( value > 0 && value <= maximum )); then
+      printf '%s\n' "$value"
+      return
+    fi
+  fi
+  printf '%s\n' "$maximum"
+}
+
+set_raw() {
+  local value="$1"
+  (( value < 0 )) && value=0
+  (( value > maximum )) && value="$maximum"
+  "$brightnessctl_bin" -q -d "$device" set "$value" >/dev/null \
+    || fail "brightnessctl could not set $device"
+}
+
+case "$action" in
+  status)
+    ;;
+  set)
+    [[ "$requested_percent" =~ ^[0-9]+$ ]] || fail "percentage must be an integer from 0 to 100"
+    (( requested_percent >= 0 && requested_percent <= 100 )) || fail "percentage must be an integer from 0 to 100"
+    raw=$(( (requested_percent * maximum + 50) / 100 ))
+    (( requested_percent > 0 && raw == 0 )) && raw=1
+    set_raw "$raw"
+    ;;
+  up|down)
+    current="$(current_brightness)"
+    step=$(( maximum / 10 ))
+    (( step < 1 )) && step=1
+    if [[ "$action" == "up" ]]; then
+      set_raw $(( current + step ))
+    else
+      set_raw $(( current - step ))
+    fi
+    ;;
+  off)
+    current="$(current_brightness)"
+    (( current > 0 )) && remember_brightness "$current"
+    set_raw 0
+    ;;
+  toggle)
+    current="$(current_brightness)"
+    if (( current > 0 )); then
+      remember_brightness "$current"
+      set_raw 0
+    else
+      set_raw "$(saved_brightness)"
+    fi
+    ;;
+  *)
+    fail "unknown action '$action' (expected status, set, up, down, off, or toggle)"
+    ;;
+esac
+
+print_status
